@@ -7,8 +7,9 @@ app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
-OWNER_ID = 5931266589
+OWNER_ID = 8655472622
 
 
 def telegram_api(method, data):
@@ -67,6 +68,39 @@ def ask_gemini(text):
     return result["candidates"][0]["content"]["parts"][0]["text"]
 
 
+def ask_openrouter(text):
+    url = "https://openrouter.ai/api/v1/chat/completions"
+
+    payload = {
+        "model": "openrouter/free",
+        "messages": [
+            {
+                "role": "user",
+                "content": text
+            }
+        ]
+    }
+
+    body = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + OPENROUTER_API_KEY,
+            "HTTP-Referer": "https://privateairoom.onrender.com",
+            "X-Title": "Private AI Room"
+        },
+        method="POST"
+    )
+
+    with urllib.request.urlopen(req, timeout=60) as response:
+        result = json.loads(response.read().decode("utf-8"))
+
+    return result["choices"][0]["message"]["content"]
+
+
 @app.route("/")
 def home():
     return jsonify({
@@ -93,41 +127,50 @@ def telegram_webhook():
     if not chat_id:
         return jsonify({"ok": True})
 
-    # TEMPORARY: security bypass for testing
-    if False:
+    if user_id != OWNER_ID:
         send_message(
             chat_id,
             "🔒 Private AI Room is private."
         )
         return jsonify({"ok": True})
 
-    if text == "/start":
-        send_message(
-            chat_id,
-            "🤖 Welcome to Private AI Room!\n\n"
-            "👤 Human + 💜 Gemini\n\n"
-            "🆔 Your Telegram ID: " + str(user_id)
-        )
-        return jsonify({"ok": True})
-
-    if text == "/myid":
-        send_message(
-            chat_id,
-            "Your Telegram user ID is: " + str(user_id)
-        )
-        return jsonify({"ok": True})
-
-    if text:
-        try:
-            reply = ask_gemini(text)
-            send_message(chat_id, reply)
-
-        except Exception as e:
+    try:
+        if text == "/start":
             send_message(
                 chat_id,
-                f"⚠️ Gemini error:\n"
-                f"{type(e).__name__}: {str(e)[:500]}"
+                "🤖 Welcome to Private AI Room!\n\n"
+                "👤 Human\n"
+                "💜 Gemini\n"
+                "🤖 OpenRouter AI\n\n"
+                "🔐 Private access confirmed.\n\n"
+                "Normal message → Gemini\n"
+                "/gpt message → OpenRouter AI"
             )
+            return jsonify({"ok": True})
+
+        if text == "/myid":
+            send_message(
+                chat_id,
+                f"Your Telegram ID is: {user_id}"
+            )
+            return jsonify({"ok": True})
+
+        if text.startswith("/gpt "):
+            prompt = text[5:].strip()
+            reply = ask_openrouter(prompt)
+        elif text:
+            reply = ask_gemini(text)
+        else:
+            return jsonify({"ok": True})
+
+        send_message(chat_id, reply)
+
+    except Exception as e:
+        send_message(
+            chat_id,
+            f"⚠️ AI error:\n"
+            f"{type(e).__name__}: {str(e)[:500]}"
+        )
 
     return jsonify({"ok": True})
 
