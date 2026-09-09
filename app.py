@@ -93,33 +93,32 @@ def telegram_webhook():
     if not chat_id:
         return jsonify({"ok": True})
 
-    # Owner-only security
-    if user_id != OWNER_ID:
+    # TEMPORARY: security bypass for testing
+    if False:
         send_message(
             chat_id,
             "🔒 Private AI Room is private."
         )
         return jsonify({"ok": True})
 
+    if text == "/start":
+        send_message(
+            chat_id,
+            "🤖 Welcome to Private AI Room!\n\n"
+            "👤 Human + 💜 Gemini\n\n"
+            "🆔 Your Telegram ID: " + str(user_id)
+        )
+        return jsonify({"ok": True})
+
+    if text == "/myid":
+        send_message(
+            chat_id,
+            "Your Telegram user ID is: " + str(user_id)
+        )
+        return jsonify({"ok": True})
+
     if text:
         try:
-            # Special commands
-            if text == "/start":
-                send_message(
-                    chat_id,
-                    "🤖 Welcome to Private AI Room!\n\n"
-                    "👤 Human + 💜 Gemini\n\n"
-                    "🔐 Private owner access confirmed."
-                )
-                return jsonify({"ok": True})
-
-            if text == "/myid":
-                send_message(
-                    chat_id,
-                    f"Your user ID is: {user_id}"
-                )
-                return jsonify({"ok": True})
-
             reply = ask_gemini(text)
             send_message(chat_id, reply)
 
