@@ -7,6 +7,7 @@ app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
 OWNER_ID = 5931266589
 
 
@@ -84,26 +85,49 @@ def telegram_webhook():
     update = request.get_json(silent=True) or {}
 
     message = update.get("message", {})
+
     chat_id = message.get("chat", {}).get("id")
+    user_id = message.get("from", {}).get("id")
     text = message.get("text", "")
 
     if not chat_id:
         return jsonify({"ok": True})
 
-    # Private owner-only access
-    if chat_id != OWNER_ID:
-        send_message(chat_id, "🔒 Private AI Room is private.")
+    # Owner-only security
+    if user_id != OWNER_ID:
+        send_message(
+            chat_id,
+            "🔒 Private AI Room is private."
+        )
         return jsonify({"ok": True})
 
     if text:
         try:
+            # Special commands
+            if text == "/start":
+                send_message(
+                    chat_id,
+                    "🤖 Welcome to Private AI Room!\n\n"
+                    "👤 Human + 💜 Gemini\n\n"
+                    "🔐 Private owner access confirmed."
+                )
+                return jsonify({"ok": True})
+
+            if text == "/myid":
+                send_message(
+                    chat_id,
+                    f"Your user ID is: {user_id}"
+                )
+                return jsonify({"ok": True})
+
             reply = ask_gemini(text)
             send_message(chat_id, reply)
 
         except Exception as e:
             send_message(
                 chat_id,
-                f"⚠️ Gemini error:\n{type(e).__name__}: {str(e)[:500]}"
+                f"⚠️ Gemini error:\n"
+                f"{type(e).__name__}: {str(e)[:500]}"
             )
 
     return jsonify({"ok": True})
