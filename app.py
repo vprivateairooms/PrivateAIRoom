@@ -34,7 +34,7 @@ def send_message(chat_id, text):
 def ask_gemini(text):
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-2.5-flash:generateContent?key="
+        "gemini-3.1-flash-lite:generateContent?key="
         + GEMINI_API_KEY
     )
 
