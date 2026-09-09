@@ -1,47 +1,10 @@
 import os
 import json
 import shutil
+import subprocess
 import urllib.request
-from pathlib import Path
-
 from flask import Flask, request, jsonify
 
-
-# =========================================================
-# CODEX AUTH SETUP — MUST HAPPEN BEFORE IMPORTING CODEX
-# =========================================================
-
-CODEX_HOME = "/tmp/codex"
-SOURCE_AUTH = "/etc/secrets/auth.json"
-TARGET_AUTH = "/tmp/codex/auth.json"
-CONFIG_FILE = "/tmp/codex/config.toml"
-
-os.makedirs(CODEX_HOME, exist_ok=True)
-
-if os.path.exists(SOURCE_AUTH):
-    shutil.copyfile(SOURCE_AUTH, TARGET_AUTH)
-
-# Force Codex to use ChatGPT authentication
-# and file-based credentials.
-with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-    f.write(
-        'cli_auth_credentials_store = "file"\n'
-        'forced_login_method = "chatgpt"\n'
-    )
-
-os.environ["CODEX_HOME"] = CODEX_HOME
-
-# Do NOT let an API key accidentally override ChatGPT auth.
-os.environ.pop("OPENAI_API_KEY", None)
-
-
-# Import only AFTER CODEX_HOME is configured.
-from openai_codex import Codex
-
-
-# =========================================================
-# FLASK
-# =========================================================
 
 app = Flask(__name__)
 
@@ -58,31 +21,220 @@ OWNER_ID = 8655472622
 
 
 # =========================================================
-# TELEGRAM API
+# CODEX CHATGPT AUTH
+# =========================================================
+
+CODEX_HOME = "/tmp/codex"
+
+SOURCE_AUTH = "/etc/secrets/auth.json"
+TARGET_AUTH = "/tmp/codex/auth.json"
+
+os.makedirs(CODEX_HOME, exist_ok=True)
+
+if os.path.exists(SOURCE_AUTH):
+    shutil.copyfile(
+        SOURCE_AUTH,
+        TARGET_AUTH
+    )
+
+# Force ChatGPT authentication.
+with open(
+    "/tmp/codex/config.toml",
+    "w",
+    encoding="utf-8"
+) as f:
+    f.write(
+        'cli_auth_credentials_store = "file"\n'
+        'forced_login_method = "chatgpt"\n'
+    )
+
+os.environ["CODEX_HOME"] = CODEX_HOME
+
+# Never use an API key for /gpt.
+os.environ.pop("OPENAI_API_KEY", None)
+
+
+# =========================================================
+# FIND CODEX EXECUTABLE
+# =========================================================
+
+def find_codex():
+
+    possible_paths = [
+        "/opt/render/project/src/.venv/bin/codex",
+        "/app/.venv/bin/codex",
+        "/usr/local/bin/codex",
+        "/usr/bin/codex",
+    ]
+
+    for path in possible_paths:
+
+        if os.path.exists(path):
+            return path
+
+    # Search PATH
+    path = shutil.which("codex")
+
+    if path:
+        return path
+
+    # Search installed Python package
+    try:
+
+        import importlib.util
+
+        spec = importlib.util.find_spec(
+            "codex_cli_bin"
+        )
+
+        if spec and spec.submodule_search_locations:
+
+            package_dir = list(
+                spec.submodule_search_locations
+            )[0]
+
+            candidate = os.path.join(
+                package_dir,
+                "bin",
+                "codex"
+            )
+
+            if os.path.exists(candidate):
+                return candidate
+
+    except Exception:
+        pass
+
+    raise RuntimeError(
+        "Codex executable not found."
+    )
+
+
+# =========================================================
+# ORIGINAL CHATGPT VIA CODEX CLI
+# =========================================================
+
+def ask_chatgpt(text):
+
+    codex = find_codex()
+
+    command = [
+        codex,
+        "exec",
+        text,
+        "--skip-git-repo-check"
+    ]
+
+    env = os.environ.copy()
+
+    env["CODEX_HOME"] = CODEX_HOME
+
+    # Explicitly prevent API-key authentication.
+    env.pop(
+        "OPENAI_API_KEY",
+        None
+    )
+
+    process = subprocess.run(
+        command,
+        cwd="/tmp",
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180
+    )
+
+    stdout = process.stdout.strip()
+    stderr = process.stderr.strip()
+
+    if process.returncode != 0:
+
+        error_text = (
+            stderr[-2000:]
+            if stderr
+            else stdout[-2000:]
+        )
+
+        raise RuntimeError(
+            "Codex CLI failed:\n"
+            + error_text
+        )
+
+    # Codex CLI normally prints the answer
+    # after the "codex" marker.
+    lines = stdout.splitlines()
+
+    answer_lines = []
+
+    capture = False
+
+    for line in lines:
+
+        stripped = line.strip()
+
+        if stripped == "codex":
+
+            capture = True
+            continue
+
+        if capture:
+
+            if stripped.startswith("tokens used"):
+                break
+
+            answer_lines.append(line)
+
+    answer = "\n".join(
+        answer_lines
+    ).strip()
+
+    if not answer:
+
+        # Fallback: remove diagnostic lines.
+        answer = stdout
+
+    return answer
+
+
+# =========================================================
+# TELEGRAM
 # =========================================================
 
 def telegram_api(method, data):
 
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/{method}"
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/{method}"
+    )
 
-    body = json.dumps(data).encode("utf-8")
+    body = json.dumps(
+        data
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         url,
         data=body,
         headers={
-            "Content-Type": "application/json"
+            "Content-Type":
+                "application/json"
         },
         method="POST"
     )
 
-    with urllib.request.urlopen(req, timeout=30) as response:
+    with urllib.request.urlopen(
+        req,
+        timeout=30
+    ) as response:
+
         return json.loads(
             response.read().decode("utf-8")
         )
 
 
-def send_message(chat_id, text):
+def send_message(
+    chat_id,
+    text
+):
 
     telegram_api(
         "sendMessage",
@@ -105,8 +257,10 @@ def ask_gemini(text):
         )
 
     url = (
-        "https://generativelanguage.googleapis.com/v1beta/models/"
-        "gemini-3.1-flash-lite:generateContent?key="
+        "https://generativelanguage.googleapis.com/"
+        "v1beta/models/"
+        "gemini-3.1-flash-lite:"
+        "generateContent?key="
         + GEMINI_API_KEY
     )
 
@@ -122,13 +276,16 @@ def ask_gemini(text):
         ]
     }
 
-    body = json.dumps(payload).encode("utf-8")
+    body = json.dumps(
+        payload
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         url,
         data=body,
         headers={
-            "Content-Type": "application/json"
+            "Content-Type":
+                "application/json"
         },
         method="POST"
     )
@@ -160,7 +317,8 @@ def ask_openrouter(text):
         )
 
     url = (
-        "https://openrouter.ai/api/v1/chat/completions"
+        "https://openrouter.ai/api/v1/"
+        "chat/completions"
     )
 
     payload = {
@@ -173,15 +331,19 @@ def ask_openrouter(text):
         ]
     }
 
-    body = json.dumps(payload).encode("utf-8")
+    body = json.dumps(
+        payload
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         url,
         data=body,
         headers={
-            "Content-Type": "application/json",
+            "Content-Type":
+                "application/json",
             "Authorization":
-                "Bearer " + OPENROUTER_API_KEY,
+                "Bearer "
+                + OPENROUTER_API_KEY,
             "HTTP-Referer":
                 "https://privateairoom.onrender.com",
             "X-Title":
@@ -206,24 +368,6 @@ def ask_openrouter(text):
 
 
 # =========================================================
-# ORIGINAL OPENAI / CHATGPT
-# =========================================================
-
-def ask_chatgpt(text):
-
-    with Codex() as codex:
-
-        thread = codex.thread_start(
-            cwd="/tmp",
-            ephemeral=True
-        )
-
-        result = thread.run(text)
-
-        return result.final_response
-
-
-# =========================================================
 # HOME
 # =========================================================
 
@@ -231,8 +375,10 @@ def ask_chatgpt(text):
 def home():
 
     return jsonify({
-        "project": "Private AI Room",
-        "status": "online",
+        "project":
+            "Private AI Room",
+        "status":
+            "online",
         "ai": [
             "Human",
             "Original ChatGPT",
@@ -250,7 +396,8 @@ def home():
 def health():
 
     return jsonify({
-        "status": "healthy"
+        "status":
+            "healthy"
     })
 
 
@@ -264,24 +411,29 @@ def health():
 )
 def telegram_webhook():
 
-    update = request.get_json(
-        silent=True
-    ) or {}
+    update = (
+        request.get_json(
+            silent=True
+        )
+        or {}
+    )
 
     message = update.get(
         "message",
         {}
     )
 
-    chat_id = message.get(
-        "chat",
-        {}
-    ).get("id")
+    chat_id = (
+        message
+        .get("chat", {})
+        .get("id")
+    )
 
-    user_id = message.get(
-        "from",
-        {}
-    ).get("id")
+    user_id = (
+        message
+        .get("from", {})
+        .get("id")
+    )
 
     text = message.get(
         "text",
@@ -371,7 +523,9 @@ def telegram_webhook():
                     "ok": True
                 })
 
-            reply = ask_chatgpt(prompt)
+            reply = ask_chatgpt(
+                prompt
+            )
 
 
         # -------------------------------------------------
@@ -393,7 +547,9 @@ def telegram_webhook():
                     "ok": True
                 })
 
-            reply = ask_openrouter(prompt)
+            reply = ask_openrouter(
+                prompt
+            )
 
 
         # -------------------------------------------------
@@ -402,7 +558,9 @@ def telegram_webhook():
 
         elif text:
 
-            reply = ask_gemini(text)
+            reply = ask_gemini(
+                text
+            )
 
 
         else:
@@ -413,7 +571,7 @@ def telegram_webhook():
 
 
         # -------------------------------------------------
-        # SEND
+        # SEND RESPONSE
         # -------------------------------------------------
 
         send_message(
@@ -428,7 +586,7 @@ def telegram_webhook():
             chat_id,
             "⚠️ AI error:\n"
             f"{type(e).__name__}: "
-            f"{str(e)[:700]}"
+            f"{str(e)[:1000]}"
         )
 
 
@@ -438,7 +596,7 @@ def telegram_webhook():
 
 
 # =========================================================
-# TELEGRAM WEBHOOK SETUP
+# WEBHOOK SETUP
 # =========================================================
 
 def setup_telegram():
@@ -478,10 +636,6 @@ def setup_telegram():
     except Exception:
         pass
 
-
-# =========================================================
-# START
-# =========================================================
 
 setup_telegram()
 
