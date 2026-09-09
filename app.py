@@ -7,6 +7,7 @@ app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OWNER_ID = 5931266589
 
 
 def telegram_api(method, data):
@@ -86,7 +87,15 @@ def telegram_webhook():
     chat_id = message.get("chat", {}).get("id")
     text = message.get("text", "")
 
-    if chat_id and text:
+    if not chat_id:
+        return jsonify({"ok": True})
+
+    # Private owner-only access
+    if chat_id != OWNER_ID:
+        send_message(chat_id, "🔒 Private AI Room is private.")
+        return jsonify({"ok": True})
+
+    if text:
         try:
             reply = ask_gemini(text)
             send_message(chat_id, reply)
