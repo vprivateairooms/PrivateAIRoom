@@ -2,11 +2,17 @@ import os
 import json
 import urllib.request
 from flask import Flask, request, jsonify
+from openai import OpenAI
 
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://privateairoom.onrender.com")
+RENDER_URL = os.environ.get(
+    "RENDER_EXTERNAL_URL",
+    "https://privateairoom.onrender.com"
+)
+
+client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 
 def telegram_api(method, data):
@@ -34,12 +40,21 @@ def send_message(chat_id, text):
     )
 
 
+def ask_chatgpt(text):
+    response = client.responses.create(
+        model="gpt-5",
+        input=text
+    )
+    return response.output_text
+
+
 @app.route("/")
 def home():
     return jsonify({
         "project": "Private AI Room",
         "status": "online",
-        "telegram": "connected"
+        "telegram": "connected",
+        "chatgpt": "connected"
     })
 
 
@@ -64,13 +79,19 @@ def telegram_webhook():
         if text == "/start":
             send_message(
                 chat_id,
-                "🤖 Welcome to Private AI Room!\n\nHuman + ChatGPT + Gemini\n\nRoom is coming online 🚀"
+                "🤖 Welcome to Private AI Room!\n\n"
+                "Human + ChatGPT + Gemini\n\n"
+                "ChatGPT is coming online 🚀"
             )
         elif text:
-            send_message(
-                chat_id,
-                f"📨 Private AI Room received:\n{text}"
-            )
+            try:
+                reply = ask_chatgpt(text)
+                send_message(chat_id, reply)
+            except Exception:
+                send_message(
+                    chat_id,
+                    "⚠️ ChatGPT connection error."
+                )
 
     return jsonify({"ok": True})
 
