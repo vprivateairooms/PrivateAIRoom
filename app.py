@@ -7,12 +7,9 @@ from openai import OpenAI
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-RENDER_URL = os.environ.get(
-    "RENDER_EXTERNAL_URL",
-    "https://privateairoom.onrender.com"
-)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 
 def telegram_api(method, data):
@@ -31,13 +28,10 @@ def telegram_api(method, data):
 
 
 def send_message(chat_id, text):
-    return telegram_api(
-        "sendMessage",
-        {
-            "chat_id": chat_id,
-            "text": text
-        }
-    )
+    telegram_api("sendMessage", {
+        "chat_id": chat_id,
+        "text": text
+    })
 
 
 def ask_chatgpt(text):
@@ -52,46 +46,31 @@ def ask_chatgpt(text):
 def home():
     return jsonify({
         "project": "Private AI Room",
-        "status": "online",
-        "telegram": "connected",
-        "chatgpt": "connected"
+        "status": "online"
     })
 
 
 @app.route("/health")
 def health():
-    return jsonify({
-        "status": "healthy"
-    })
+    return jsonify({"status": "healthy"})
 
 
 @app.route("/telegram/webhook", methods=["POST"])
 def telegram_webhook():
     update = request.get_json(silent=True) or {}
-
     message = update.get("message", {})
-    chat = message.get("chat", {})
+    chat_id = message.get("chat", {}).get("id")
     text = message.get("text", "")
 
-    chat_id = chat.get("id")
-
-    if chat_id:
-        if text == "/start":
+    if chat_id and text:
+        try:
+            reply = ask_chatgpt(text)
+            send_message(chat_id, reply)
+        except Exception as e:
             send_message(
                 chat_id,
-                "🤖 Welcome to Private AI Room!\n\n"
-                "Human + ChatGPT + Gemini\n\n"
-                "ChatGPT is coming online 🚀"
+                f"⚠️ ChatGPT error:\n{type(e).__name__}: {str(e)[:500]}"
             )
-        elif text:
-            try:
-                reply = ask_chatgpt(text)
-                send_message(chat_id, reply)
-            except Exception:
-                send_message(
-                    chat_id,
-                    "⚠️ ChatGPT connection error."
-                )
 
     return jsonify({"ok": True})
 
@@ -100,15 +79,20 @@ def setup_telegram():
     if not BOT_TOKEN:
         return
 
-    webhook_url = f"{RENDER_URL}/telegram/webhook"
+    url = "https://api.telegram.org/bot" + BOT_TOKEN + "/setWebhook"
+    data = json.dumps({
+        "url": "https://privateairoom.onrender.com/telegram/webhook"
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
 
     try:
-        telegram_api(
-            "setWebhook",
-            {
-                "url": webhook_url
-            }
-        )
+        urllib.request.urlopen(req, timeout=20)
     except Exception:
         pass
 
