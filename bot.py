@@ -1,122 +1,93 @@
 import os
-import json
 import subprocess
 import requests
 import time
-from pathlib import Path
+from recovery import add, get
 
 TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 URL = f"https://api.telegram.org/bot{TOKEN}/"
-DATA = Path("conversation_recovery.json")
 
-if DATA.exists():
-    history = json.loads(DATA.read_text())
-else:
-    history = {}
-
-def save():
-    DATA.write_text(json.dumps(history, ensure_ascii=False, indent=2))
-
-def send_message(chat_id, text):
+def send(chat_id, text):
     requests.post(
         URL + "sendMessage",
         json={"chat_id": chat_id, "text": text[:4096]},
         timeout=30
     )
 
-def run_codex(prompt):
-    result = subprocess.run(
-        ["codex", "exec", prompt, "--skip-git-repo-check"],
+def chatgpt(prompt):
+    r = subprocess.run(
+        [os.environ.get("CODEX_BIN", "codex"), "exec",
+         prompt, "--skip-git-repo-check"],
         capture_output=True,
         text=True,
         timeout=180
     )
-    return (result.stdout or result.stderr).strip()
-
-def recovery(chat_id):
-    h = history.get(str(chat_id), [])
-    if not h:
-        return "📦 Recovery: No saved conversation yet."
-
-    text = "📦 PRIVATE AI ROOM RECOVERY\n\n"
-    for item in h:
-        text += f"{item['role'].upper()}: {item['text']}\n\n"
-
-    for i in range(0, len(text), 4000):
-        send_message(chat_id, text[i:i+4000])
+    return (r.stdout or r.stderr).strip()
 
 def main():
-    print("PRIVATE AI ROOM RECOVERY BOT STARTED")
+    print("PRIVATE AI ROOM FINAL BOT STARTED")
     offset = None
 
     while True:
         try:
-            r = requests.get(
+            data = requests.get(
                 URL + "getUpdates",
                 params={"timeout": 50, "offset": offset},
                 timeout=60
             ).json()
 
-            for update in r.get("result", []):
+            for update in data.get("result", []):
                 offset = update["update_id"] + 1
+                msg = update.get("message")
 
-                message = update.get("message")
-                if not message or "text" not in message:
+                if not msg or "text" not in msg:
                     continue
 
-                chat_id = message["chat"]["id"]
-                text = message["text"]
-                key = str(chat_id)
+                chat_id = msg["chat"]["id"]
+                text = msg["text"]
 
                 if text == "/recovery":
-                    recovery(chat_id)
+                    history = get(chat_id)
+
+                    if not history:
+                        send(chat_id, "📦 No saved conversation yet.")
+                    else:
+                        out = "📦 PRIVATE AI ROOM RECOVERY\n\n"
+                        for item in history:
+                            out += f"{item['role'].upper()}: {item['text']}\n\n"
+
+                        for i in range(0, len(out), 4000):
+                            send(chat_id, out[i:i+4000])
                     continue
 
-                if key not in history:
-                    history[key] = []
+                add(chat_id, "user", text)
+                send(chat_id, "🧠 ChatGPT thinking...")
 
-                history[key].append({
-                    "role": "user",
-                    "text": text
-                })
-                save()
-
-                send_message(chat_id, "🧠 ChatGPT thinking...")
-
-                conversation = "\n".join(
+                history = get(chat_id)
+                context = "\n".join(
                     f"{x['role'].upper()}: {x['text']}"
-                    for x in history[key]
+                    for x in history
                 )
 
-                prompt = f"""
-You are the main ChatGPT inside Private AI Room.
+                prompt = f"""You are the main ChatGPT inside Private AI Room.
 
-Use the complete conversation history below as context.
-Continue the conversation naturally.
-Do not claim to be Gemini or OpenRouter.
+Use this saved conversation as context:
 
-CONVERSATION HISTORY:
-{conversation}
+{context}
 
-USER'S LATEST MESSAGE:
-{text}
+Answer the latest user message naturally.
 """
 
                 try:
-                    reply = run_codex(prompt)
+                    reply = chatgpt(prompt)
                 except Exception as e:
                     reply = f"❌ ChatGPT error: {e}"
 
                 if not reply:
                     reply = "❌ Empty response"
 
-                history[key].append({
-                    "role": "assistant",
-                    "text": reply
-                })
-                save()
-
-                send_message(chat_id, reply)
+                add(chat_id, "assistant", reply)
+                send(chat_id, reply)
 
         except Exception as e:
             print("Polling error:", e)
